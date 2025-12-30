@@ -17,7 +17,8 @@ export default function LabPage({ setAnalysisData }) {
     formData.append('file', file);
 
     try {
-      const res = await axios.post('http://localhost:8000/generate-hypothesis', formData);
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const res = await axios.post(`${backendUrl}/generate-hypothesis`, formData);
       setAnalysisData(res.data);
       navigate('/analysis'); // Automatically jump to the results page
     } catch (err) {
