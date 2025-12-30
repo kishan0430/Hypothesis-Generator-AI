@@ -1,0 +1,18 @@
+# Secrets
+backend/.env
+frontend/.env
+*.env
+
+# Python
+backend/__pycache__/
+backend/venv/
+backend/.pytest_cache/
+
+# Node / React
+frontend/node_modules/
+frontend/dist/
+frontend/.eslintcache
+
+# System
+.DS_Store
+Thumbs.db
