@@ -9,10 +9,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 1. NEW 2025 CONFIGURATION
+# Configure Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-# Using the stable December 2025 model
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 app = FastAPI()
 
@@ -23,16 +22,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def extract_safe_text(file_bytes):
+# --- FIXED FUNCTION NAME ---
+def extract_text(file_bytes):
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
         text = ""
-        # We only take the first few pages to stay under Free Tier Token limits
-        for page in reader.pages[:10]: 
+        # Limit to first 10 pages for safety and speed
+        for page in reader.pages[:10]:
             content = page.extract_text()
-            if content: text += content
-        # LIMIT TO 8,000 CHARS (Safe for 2025 Free Tier TPM)
-        return text[:8000] 
+            if content:
+                text += content
+        return text[:8000] # Safe character limit for free tier
     except Exception as e:
         raise Exception(f"PDF Error: {str(e)}")
 
@@ -40,40 +40,50 @@ def extract_safe_text(file_bytes):
 async def generate_hypothesis(file: UploadFile = File(...)):
     try:
         content = await file.read()
-        paper_text = extract_safe_text(content)
+        paper_text = extract_text(content) # Calling the correct name now
         
         if not paper_text.strip():
-            raise HTTPException(status_code=400, detail="No readable text in PDF.")
+            raise HTTPException(status_code=400, detail="The PDF contains no readable text.")
 
+        # --- THE STRICT GUARDRAIL PROMPT ---
         prompt = f"""
-        Act as a Senior Scientist. Review this paper excerpt:
+        Act as a Strict Scientific Gatekeeper.
+        
+        STEP 1: Identify the document type.
+        STEP 2: IF the document is a Resume, CV, Bio-data, or Portfolio, STOP and return ONLY this JSON:
+        {{ "error": "Access Denied: Resumes and CVs are not permitted. Please upload a Scientific Research Paper." }}
+        
+        STEP 3: ONLY IF it is a Scientific Research Paper, return this JSON:
+        {{
+          "summary": "...",
+          "hypotheses": [
+            {{ "title": "...", "gap": "...", "hypothesis": "...", "impact": 9, "feasibility": 8 }}
+          ]
+        }}
+        
+        DOC TO ANALYZE:
         {paper_text}
-
-        Generate a JSON response with:
-        "summary": "2 sentence overview",
-        "hypotheses": [
-            {{"title": "...", "gap": "...", "hypothesis": "...", "impact": 9, "feasibility": 7}}
-        ]
-        Return ONLY valid JSON.
         """
 
         response = model.generate_content(prompt)
         
-        # 2025 AI cleaning logic
-        raw = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(raw)
+        # Clean the response
+        raw_text = response.text.replace('```json', '').replace('```', '').strip()
+        data = json.loads(raw_text)
 
+        # CHECK FOR RESUME ERROR
+        if "error" in data:
+            raise HTTPException(status_code=400, detail=data["error"])
+
+        return data
+
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="AI response was not valid JSON.")
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        err_msg = str(e)
-        print(f"Server Log: {err_msg}")
-        
-        # Specific 2025 Error Handling
-        if "429" in err_msg or "quota" in err_msg.lower():
-            raise HTTPException(status_code=429, detail="2025 Free Quota reached. Please wait 2 mins or use a smaller PDF.")
-        if "404" in err_msg:
-            raise HTTPException(status_code=404, detail="Model outdated. Please check main.py line 13.")
-            
-        raise HTTPException(status_code=500, detail="Gemini Error: " + err_msg)
+        print(f"Server Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
