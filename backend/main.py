@@ -8,10 +8,8 @@ from pypdf import PdfReader
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# Configure Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel('gemini-1.5-flash') # Use flash for faster logic
 
 app = FastAPI()
 
@@ -22,17 +20,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- FIXED FUNCTION NAME ---
 def extract_text(file_bytes):
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
         text = ""
-        # Limit to first 10 pages for safety and speed
         for page in reader.pages[:10]:
             content = page.extract_text()
-            if content:
-                text += content
-        return text[:8000] # Safe character limit for free tier
+            if content: text += content
+        return text.lower() # Convert to lowercase for easier checking
     except Exception as e:
         raise Exception(f"PDF Error: {str(e)}")
 
@@ -40,20 +35,26 @@ def extract_text(file_bytes):
 async def generate_hypothesis(file: UploadFile = File(...)):
     try:
         content = await file.read()
-        paper_text = extract_text(content) # Calling the correct name now
+        raw_text = extract_text(content)
         
-        if not paper_text.strip():
-            raise HTTPException(status_code=400, detail="The PDF contains no readable text.")
+        # --- PHASE 1: HARD-CODED RESUME DETECTION ---
+        # If these words appear, it's almost certainly a resume
+        resume_keywords = ["experience", "education", "skills", "projects", "contact", "phone:", "email:", "languages", "summary", "objective", "achievements"]
+        match_count = sum(1 for word in resume_keywords if word in raw_text)
+        
+        # If more than 4 resume keywords appear, block it immediately
+        if match_count > 4:
+             raise HTTPException(status_code=400, detail="CRITICAL REJECTION: This document appears to be a Resume/CV. This engine ONLY accepts Scientific Research Papers.")
 
-        # --- THE STRICT GUARDRAIL PROMPT ---
+        # --- PHASE 2: AGGRESSIVE AI VALIDATION ---
         prompt = f"""
-        Act as a Strict Scientific Gatekeeper.
+        SYSTEM INSTRUCTION: You are a Scientific Integrity Officer. 
+        Your ONLY job is to analyze peer-reviewed research papers.
         
-        STEP 1: Identify the document type.
-        STEP 2: IF the document is a Resume, CV, Bio-data, or Portfolio, STOP and return ONLY this JSON:
-        {{ "error": "Access Denied: Resumes and CVs are not permitted. Please upload a Scientific Research Paper." }}
+        STRICT RULE: If the following text is a Resume, CV, Bio-data, or Personal Profile, you MUST respond with the word "INVALID" and nothing else. 
+        DO NOT try to be helpful. DO NOT extract hypotheses from a resume.
         
-        STEP 3: ONLY IF it is a Scientific Research Paper, return this JSON:
+        IF AND ONLY IF the text is a legitimate Scientific Research Paper (containing Abstract, Methodology, Results, or Citations), provide a JSON analysis:
         {{
           "summary": "...",
           "hypotheses": [
@@ -61,28 +62,26 @@ async def generate_hypothesis(file: UploadFile = File(...)):
           ]
         }}
         
-        DOC TO ANALYZE:
-        {paper_text}
+        DOCUMENT TEXT:
+        {raw_text[:10000]}
         """
 
         response = model.generate_content(prompt)
-        
-        # Clean the response
-        raw_text = response.text.replace('```json', '').replace('```', '').strip()
-        data = json.loads(raw_text)
+        response_text = response.text.strip()
 
-        # CHECK FOR RESUME ERROR
-        if "error" in data:
-            raise HTTPException(status_code=400, detail=data["error"])
+        # If AI says it's invalid
+        if "INVALID" in response_text.upper():
+            raise HTTPException(status_code=400, detail="AI REJECTION: This document is not a scientific research paper. Please upload a study or thesis.")
 
-        return data
+        # Try to parse the JSON
+        clean_json = response_text.replace('```json', '').replace('```', '').strip()
+        return json.loads(clean_json)
 
     except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="AI response was not valid JSON.")
+        raise HTTPException(status_code=400, detail="The AI could not verify this as a scientific document.")
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"Server Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
