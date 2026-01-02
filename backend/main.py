@@ -1,15 +1,18 @@
 import os
 import io
 import json
-import google.generativeai as genai
+import re
+from google import genai
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pypdf import PdfReader
 from dotenv import load_dotenv
 
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-1.5-flash-latest') # Use flash for faster logic
+
+# 1. SETUP GENAI CLIENT (2026 Standard)
+api_key = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=api_key)
 
 app = FastAPI()
 
@@ -24,65 +27,63 @@ def extract_text(file_bytes):
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
         text = ""
-        for page in reader.pages[:10]:
+        # We only read the first 5 pages to stay within FREE TIER limits
+        for page in reader.pages[:5]:
             content = page.extract_text()
             if content: text += content
-        return text.lower() # Convert to lowercase for easier checking
+        return text
     except Exception as e:
-        raise Exception(f"PDF Error: {str(e)}")
+        print(f"PDF Error: {e}")
+        return ""
 
 @app.post("/generate-hypothesis")
 async def generate_hypothesis(file: UploadFile = File(...)):
     try:
         content = await file.read()
-        raw_text = extract_text(content)
+        paper_text = extract_text(content)
         
-        # --- PHASE 1: HARD-CODED RESUME DETECTION ---
-        # If these words appear, it's almost certainly a resume
-        resume_keywords = ["experience", "education", "skills", "projects", "contact", "phone:", "email:", "languages", "summary", "objective", "achievements"]
-        match_count = sum(1 for word in resume_keywords if word in raw_text)
-        
-        # If more than 4 resume keywords appear, block it immediately
-        if match_count > 4:
-             raise HTTPException(status_code=400, detail="CRITICAL REJECTION: This document appears to be a Resume/CV. This engine ONLY accepts Scientific Research Papers.")
+        if len(paper_text.strip()) < 50:
+            raise HTTPException(status_code=400, detail="Document text is too short or unreadable.")
 
-        # --- PHASE 2: AGGRESSIVE AI VALIDATION ---
+        # --- OPTIMIZATION: Limit to 4000 characters to avoid 429 errors ---
+        safe_text = paper_text[:4000]
+
         prompt = f"""
-        SYSTEM INSTRUCTION: You are a Scientific Integrity Officer. 
-        Your ONLY job is to analyze peer-reviewed research papers.
-        
-        STRICT RULE: If the following text is a Resume, CV, Bio-data, or Personal Profile, you MUST respond with the word "INVALID" and nothing else. 
-        DO NOT try to be helpful. DO NOT extract hypotheses from a resume.
-        
-        IF AND ONLY IF the text is a legitimate Scientific Research Paper (containing Abstract, Methodology, Results, or Citations), provide a JSON analysis:
+        Act as a Senior Research Scientist. Analyze this paper excerpt:
+        {safe_text}
+
+        Return ONLY a JSON object with this exact structure:
         {{
-          "summary": "...",
+          "summary": "2-sentence overview",
           "hypotheses": [
             {{ "title": "...", "gap": "...", "hypothesis": "...", "impact": 9, "feasibility": 8 }}
           ]
         }}
-        
-        DOCUMENT TEXT:
-        {raw_text[:10000]}
         """
 
-        response = model.generate_content(prompt)
-        response_text = response.text.strip()
+        # API Call
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
+        
+        # Clean JSON Response
+        raw_text = response.text
+        match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        else:
+            raise Exception("AI failed to return valid JSON.")
 
-        # If AI says it's invalid
-        if "INVALID" in response_text.upper():
-            raise HTTPException(status_code=400, detail="AI REJECTION: This document is not a scientific research paper. Please upload a study or thesis.")
-
-        # Try to parse the JSON
-        clean_json = response_text.replace('```json', '').replace('```', '').strip()
-        return json.loads(clean_json)
-
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="The AI could not verify this as a scientific document.")
-    except HTTPException as he:
-        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_str = str(e)
+        print(f"SERVER LOG: {error_str}")
+        
+        # Catch Rate Limit specifically
+        if "429" in error_str or "quota" in error_str.lower():
+            raise HTTPException(status_code=429, detail="Rate Limit: Please wait 60 seconds.")
+            
+        raise HTTPException(status_code=500, detail=error_str)
 
 if __name__ == "__main__":
     import uvicorn
