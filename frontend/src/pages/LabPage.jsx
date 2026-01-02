@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { FileUp, Loader2, AlertTriangle, CheckCircle2, Clock } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { FileUp, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 
@@ -26,50 +26,39 @@ export default function LabPage({ setAnalysisData }) {
       setAnalysisData(res.data);
       navigate('/analysis');
     } catch (err) {
-      const detail = err.response?.data?.detail || "";
-      
-      if (detail.includes("429") || detail.includes("Rate Limit")) {
-        setError("Google API Rate Limit reached. Please wait 60 seconds before trying again.");
-      } else {
-        setError(detail || "Connection Error: Check if backend is running.");
-      }
+      const detail = err.response?.data?.detail || "AI Engine busy. Wait 60 seconds.";
+      setError(detail);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="p-8 md:p-12 h-full flex flex-col items-center justify-center">
+    <div className="p-8 h-full flex flex-col items-center justify-center bg-transparent">
       <motion.div 
         initial={{ scale: 0.95, opacity: 0 }} 
         animate={{ scale: 1, opacity: 1 }} 
-        className="w-full max-w-2xl bg-[#0f1117]/80 border border-white/5 rounded-[3rem] p-12 md:p-16 text-center shadow-2xl backdrop-blur-xl relative overflow-hidden"
+        className="w-full max-w-2xl bg-[#0f1117]/80 border border-white/5 rounded-[3rem] p-16 text-center shadow-2xl backdrop-blur-xl relative"
       >
-        <div className="absolute -top-24 -right-24 w-48 h-48 bg-blue-600/10 rounded-full blur-[80px]" />
-
         {loading ? (
-          <div className="space-y-6 relative z-10 py-10">
+          <div className="space-y-6">
             <Loader2 size={60} className="animate-spin mx-auto text-blue-500" />
-            <h2 className="text-3xl font-bold text-white tracking-tight">Generating Hypotheses...</h2>
-            <p className="text-slate-400">Processing text through Gemini 2.0 Flash Engine</p>
+            <h2 className="text-3xl font-bold text-white tracking-tight">Analyzing Document</h2>
+            <p className="text-slate-400">Processing through Gemini 1.5 Synthesis Engine...</p>
           </div>
         ) : (
-          <div className="relative z-10">
-            <div className="bg-blue-600/10 w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-8 border border-blue-500/20">
+          <div className="space-y-8">
+            <div className="bg-blue-600/10 w-20 h-20 rounded-[2rem] flex items-center justify-center mx-auto border border-blue-500/20">
               <FileUp size={40} className="text-blue-500" />
             </div>
             
-            <h2 className="text-4xl font-bold mb-4 text-white tracking-tighter uppercase">Research Lab</h2>
-            <p className="text-slate-400 mb-10 text-lg leading-relaxed">Upload a research PDF to begin autonomous discovery.</p>
+            <h2 className="text-4xl font-bold text-white tracking-tighter uppercase">Research Lab</h2>
             
             {error && (
-              <motion.div 
-                initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
-                className="mb-8 p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-start gap-3 text-red-400 text-sm text-left"
-              >
-                <AlertTriangle size={18} className="shrink-0 mt-0.5" />
-                <p>{error}</p>
-              </motion.div>
+              <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center gap-3 text-red-400 text-sm text-left animate-pulse">
+                <AlertTriangle size={18} className="shrink-0" />
+                <span>{error}</span>
+              </div>
             )}
 
             <input type="file" id="pdfUpload" className="hidden" onChange={handleFile} accept=".pdf" />
@@ -80,9 +69,10 @@ export default function LabPage({ setAnalysisData }) {
         )}
       </motion.div>
 
-      <div className="mt-8 flex items-center gap-4 text-slate-600 text-[10px] font-bold uppercase tracking-[0.3em]">
+      <div className="mt-8 flex items-center gap-4 text-slate-500 text-[10px] font-bold uppercase tracking-[0.4em]">
         <span className="flex items-center gap-1.5 text-green-500/80"><CheckCircle2 size={12}/> Engine Online</span>
-        <span className="flex items-center gap-1.5"><Clock size={12}/> 60s Free Quota Active</span>
+        <span>|</span>
+        <span>Low-Latency Mode Active</span>
       </div>
     </div>
   );

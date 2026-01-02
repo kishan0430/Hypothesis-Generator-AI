@@ -11,8 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 1. SETUP GENAI CLIENT (2026 Standard)
-api_key = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=api_key)
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 app = FastAPI()
 
@@ -27,13 +26,13 @@ def extract_text(file_bytes):
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
         text = ""
-        # We only read the first 5 pages to stay within FREE TIER limits
+        # Limit to 5 pages for presentation safety
         for page in reader.pages[:5]:
             content = page.extract_text()
             if content: text += content
-        return text
-    except Exception as e:
-        print(f"PDF Error: {e}")
+        # LIMIT TO 4000 CHARS (Prevents 429 Resource Exhausted)
+        return text[:4000] 
+    except Exception:
         return ""
 
 @app.post("/generate-hypothesis")
@@ -43,47 +42,34 @@ async def generate_hypothesis(file: UploadFile = File(...)):
         paper_text = extract_text(content)
         
         if len(paper_text.strip()) < 50:
-            raise HTTPException(status_code=400, detail="Document text is too short or unreadable.")
+            raise HTTPException(status_code=400, detail="PDF is unreadable or too short.")
 
-        # --- OPTIMIZATION: Limit to 4000 characters to avoid 429 errors ---
-        safe_text = paper_text[:4000]
+        # SIMPLE STABLE PROMPT
+        prompt = f"Analyze this text and return a JSON object with 'summary' and 'hypotheses' list. TEXT: {paper_text}"
 
-        prompt = f"""
-        Act as a Senior Research Scientist. Analyze this paper excerpt:
-        {safe_text}
-
-        Return ONLY a JSON object with this exact structure:
-        {{
-          "summary": "2-sentence overview",
-          "hypotheses": [
-            {{ "title": "...", "gap": "...", "hypothesis": "...", "impact": 9, "feasibility": 8 }}
-          ]
-        }}
-        """
-
-        # API Call
+        # API Call using Stable 1.5 Flash (Highest Free Quota)
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-1.5-flash",
             contents=prompt
         )
         
-        # Clean JSON Response
+        # --- JSON RESCUE LOGIC ---
         raw_text = response.text
         match = re.search(r'\{.*\}', raw_text, re.DOTALL)
         if match:
             return json.loads(match.group(0))
         else:
-            raise Exception("AI failed to return valid JSON.")
+            raise Exception("AI failed to generate a stable data structure.")
 
     except Exception as e:
         error_str = str(e)
-        print(f"SERVER LOG: {error_str}")
+        print(f"DEBUG: {error_str}")
         
-        # Catch Rate Limit specifically
+        # Friendly 429 Handling
         if "429" in error_str or "quota" in error_str.lower():
-            raise HTTPException(status_code=429, detail="Rate Limit: Please wait 60 seconds.")
+            raise HTTPException(status_code=429, detail="Google Free Quota reached. Wait 60s.")
             
-        raise HTTPException(status_code=500, detail=error_str)
+        raise HTTPException(status_code=500, detail="AI Engine is busy. Please try a smaller PDF.")
 
 if __name__ == "__main__":
     import uvicorn
